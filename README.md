@@ -14,7 +14,7 @@ Une application en ligne de commande et une interface Web pour transformer vos f
 ## Installation
 
 ```bash
-pip install streamlit pypdf reportlab pymupdf matplotlib pillow
+pip install streamlit pypdf reportlab pymupdf matplotlib pillow img2pdf
 ```
 
 ## Utilisation

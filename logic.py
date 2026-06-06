@@ -3,6 +3,8 @@ from pypdf import PdfReader, PdfWriter, PageObject, Transformation
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
 import io
+from PIL import Image
+import img2pdf
 
 # Standard paper sizes in mm
 PAPER_SIZES = {
@@ -18,13 +20,68 @@ def get_paper_size(name, orientation):
     return width, height
 
 class PosterGenerator:
-    def __init__(self, input_pdf_stream):
-        self.reader = PdfReader(input_pdf_stream)
+    def __init__(self, input_stream):
+        # Try to detect if it's an image
+        input_stream.seek(0)
+        try:
+            img = Image.open(input_stream)
+            is_image = True
+            img_format = img.format
+        except Exception:
+            is_image = False
+            input_stream.seek(0)
+
+        if is_image:
+            # Handle image
+            pdf_bytes = self._image_to_pdf(img, input_stream)
+            self.reader = PdfReader(io.BytesIO(pdf_bytes))
+        else:
+            # Handle PDF
+            self.reader = PdfReader(input_stream)
+
         self.source_page = self.reader.pages[0]
         # pypdf uses points (1/72 inch). 1mm = 72/25.4 points
         self.src_width_pt = float(self.source_page.mediabox.width)
         self.src_height_pt = float(self.source_page.mediabox.height)
         self.mm_to_pt = 72 / 25.4
+
+    def _image_to_pdf(self, img, input_stream):
+        # Get DPI
+        dpi = img.info.get("dpi")
+        if not dpi or not isinstance(dpi, tuple) or dpi[0] == 0:
+            dpi = (300, 300)
+
+        # Calculate size in points based on pixels and DPI
+        # size_pt = pixels / dpi * 72
+        width_pt = (img.size[0] / dpi[0]) * 72
+        height_pt = (img.size[1] / dpi[1]) * 72
+
+        # img2pdf layout options
+        layout_fun = img2pdf.get_layout_fun(
+            (width_pt, height_pt), # force the calculated size
+            None, # fit
+            None, # auto_orient
+            None, # dpi - if we specify size, we don't need dpi here usually
+        )
+
+        input_stream.seek(0)
+        if img.format == "JPEG":
+            # Lossless encapsulation for JPEG
+            return img2pdf.convert(input_stream, layout_fun=layout_fun)
+        else:
+            # For PNG and others, handle transparency and then convert
+            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                img = img.convert("RGBA")
+                background = Image.new("RGB", img.size, (255, 255, 255))
+                background.paste(img, mask=img.split()[3])
+                img = background
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+
+            temp_img_io = io.BytesIO()
+            img.save(temp_img_io, format="PNG", dpi=dpi)
+            temp_img_io.seek(0)
+            return img2pdf.convert(temp_img_io, layout_fun=layout_fun)
 
     def calculate_grid(self, paper_size_name, orientation, target_pages, target_dimension="Width", overlap_mm=10):
         paper_w_mm, paper_h_mm = get_paper_size(paper_size_name, orientation)
@@ -38,7 +95,6 @@ class PosterGenerator:
         if target_dimension == "Width":
             cols = target_pages
             # Total width in mm (approximately, including overlaps)
-            # Actually, the total width is: (cols * effective_w_mm) + overlap_mm
             total_w_mm = (cols * effective_w_mm) + overlap_mm
             total_h_mm = total_w_mm / src_ratio
             rows = math.ceil((total_h_mm - overlap_mm) / effective_h_mm)
@@ -89,13 +145,6 @@ class PosterGenerator:
                 # New page for the tile
                 page = writer.add_blank_page(width=paper_w_pt, height=paper_h_pt)
 
-                # Translation: we want to show the part of the scaled PDF that corresponds to this tile
-                # r=0 is top row. Bottom edge of row r is at total_h_pt - (r*eff_h_pt + paper_h_pt)
-                # Wait:
-                # Row 0: Top = total_h_pt, Bottom = total_h_pt - paper_h_pt
-                # Row 1: Top = total_h_pt - eff_h_pt, Bottom = total_h_pt - eff_h_pt - paper_h_pt
-                # Row r: Bottom = total_h_pt - (r * eff_h_pt) - paper_h_pt
-
                 y_bottom = total_h_pt - (r * eff_h_pt) - paper_h_pt
                 x_left = c * eff_w_pt
 
@@ -116,19 +165,10 @@ class PosterGenerator:
                     can.setStrokeColorRGB(0.5, 0.5, 0.5)
                     can.setLineWidth(0.5)
 
-                    # Draw dotted rectangle for the overlap area
-                    # The printable/visible area is [0, eff_w_pt] x [0, eff_h_pt] ?
-                    # No, the overlap is on the right and bottom (or left and top).
-                    # Let's say we overlap on the right and top.
-                    # Or even better, just show where the "next" page starts.
-
-                    # Draw borders of the effective area
                     if c < cols - 1: # Vertical line on the right
                         can.line(eff_w_pt, 0, eff_w_pt, paper_h_pt)
                     if r > 0: # Horizontal line on the top (since r=0 is top)
                         can.line(0, paper_h_pt - eff_h_pt, paper_w_pt, paper_h_pt - eff_h_pt)
-                    # Actually, let's just draw a border around the effective area
-                    # can.rect(0, 0, eff_w_pt, eff_h_pt) # No, coordinates are tricky
 
                     can.save()
                     packet.seek(0)

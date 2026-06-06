@@ -3,8 +3,8 @@ import sys
 from logic import PosterGenerator
 
 def main():
-    parser = argparse.ArgumentParser(description="Resize Bator - Transformez un PDF en poster multi-pages")
-    parser.add_argument("input", help="Fichier PDF d'entrée")
+    parser = argparse.ArgumentParser(description="Resize Bator - Transformez un PDF ou une Image en poster multi-pages")
+    parser.add_argument("input", help="Fichier PDF ou Image d'entrée (JPG, PNG)")
     parser.add_argument("output", help="Fichier PDF de sortie")
     parser.add_argument("--size", choices=["A3", "A4", "A5"], default="A4", help="Taille de la feuille (default: A4)")
     parser.add_argument("--orientation", choices=["Portrait", "Landscape"], default="Portrait", help="Orientation (default: Portrait)")
@@ -45,6 +45,8 @@ def main():
 
     except Exception as e:
         print(f"Erreur lors de la génération: {e}")
+        # import traceback
+        # traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":
