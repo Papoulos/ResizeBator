@@ -4,15 +4,19 @@ from logic import PosterGenerator, PAPER_SIZES, get_paper_size
 import io
 from PIL import Image
 
-st.set_page_config(page_title="Resize Bator - PDF Poster", layout="wide")
+st.set_page_config(page_title="Resize Bator - PDF & Image Poster", layout="wide")
 
 st.title("Resize Bator 🖼️")
-st.subheader("Créez votre poster géant à partir d'un PDF")
+st.subheader("Créez votre poster géant à partir d'un PDF ou d'une Image")
 
-uploaded_file = st.sidebar.file_uploader("Choisissez un fichier PDF", type="pdf")
+uploaded_file = st.sidebar.file_uploader("Choisissez un fichier", type=["pdf", "jpg", "jpeg", "png"])
 
 if uploaded_file:
-    generator = PosterGenerator(uploaded_file)
+    # Use a BytesIO to avoid closing the original uploaded_file stream
+    file_bytes = uploaded_file.read()
+    uploaded_file.seek(0)
+
+    generator = PosterGenerator(io.BytesIO(file_bytes))
 
     st.sidebar.header("Configuration")
 
@@ -34,7 +38,7 @@ if uploaded_file:
         paper_size, orientation, num_pages, target_dim, overlap_mm
     )
 
-    # Check Ratio: PDF vs Single Sheet
+    # Check Ratio: Source vs Single Sheet
     src_ratio = generator.src_width_pt / generator.src_height_pt
     paper_w_mm, paper_h_mm = get_paper_size(paper_size, orientation)
     sheet_ratio = paper_w_mm / paper_h_mm
@@ -43,7 +47,7 @@ if uploaded_file:
 
     mode = "Fit"
     if ratio_diff > 0.05: # 5% tolerance
-        st.warning(f"⚠️ Le ratio du PDF ({src_ratio:.2f}) ne correspond pas au ratio d'une feuille {paper_size} {orientation} ({sheet_ratio:.2f}).")
+        st.warning(f"⚠️ Le ratio du fichier ({src_ratio:.2f}) ne correspond pas au ratio d'une feuille {paper_size} {orientation} ({sheet_ratio:.2f}).")
         mode_label = st.radio("Comment ajuster le contenu sur les feuilles ?",
                         ["Marges (Fit)", "Remplissage (Fill)", "Étirer (Stretch)"],
                         help="Fit: Garde tout le contenu avec des marges. Fill: Remplit tout l'espace (coupe les bords). Stretch: Déforme le contenu.")
@@ -67,11 +71,24 @@ if uploaded_file:
     st.divider()
     st.subheader("Aperçu du découpage")
 
-    # Generate a low-res image of the source PDF
-    doc = fitz.open(stream=uploaded_file.getvalue(), filetype="pdf")
-    page = doc.load_page(0)
-    pix = page.get_pixmap(matrix=fitz.Matrix(0.5, 0.5)) # low res
-    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    # Generate a low-res image for preview
+    if uploaded_file.name.lower().endswith(".pdf"):
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+        page = doc.load_page(0)
+        pix = page.get_pixmap(matrix=fitz.Matrix(0.5, 0.5)) # low res
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    else:
+        img = Image.open(io.BytesIO(file_bytes))
+        # Resize for preview if it's too large
+        max_preview_size = 1000
+        if max(img.size) > max_preview_size:
+            ratio = max_preview_size / max(img.size)
+            new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+            img = img.resize(new_size, Image.LANCZOS)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+
+    preview_w, preview_h = img.size
 
     # Overlay the grid on the preview image
     import matplotlib.pyplot as plt
@@ -80,17 +97,7 @@ if uploaded_file:
     fig, ax = plt.subplots(figsize=(10, 8))
     ax.imshow(img)
 
-    # In the preview, we show the source PDF and how it will be tiled.
-    # If mode is Fit, there will be margins.
-    # If mode is Fill, it will exceed the bounds.
-
-    # To keep it simple for the user: show the tiles relative to the PDF
-    # In generate(): total_w_pt = (cols * eff_w_pt) + overlap_pt
-    # scale_x = total_w_pt / src_width_pt
-
-    # Let's draw the grid in the coordinate system of the source image (pix.width, pix.height)
-
-    # total size in source units
+    # Calculate grid lines
     paper_w_pt, paper_h_pt = [x * (72/25.4) for x in get_paper_size(paper_size, orientation)]
     overlap_pt = overlap_mm * (72/25.4)
     eff_w_pt = paper_w_pt - overlap_pt
@@ -117,34 +124,28 @@ if uploaded_file:
     offset_x = (total_w_pt - scaled_w) / 2
     offset_y = (total_h_pt - scaled_h) / 2
 
-    # We want to draw the tiles on top of the PDF.
-    # A tile (c, r) in poster space is [c*eff_w_pt, c*eff_w_pt + paper_w_pt]
-    # To map this back to source space: (tile_coord - offset) / scale
-
     for r in range(rows):
         for c in range(cols):
             x_min = (c * eff_w_pt - offset_x) / scale_x
-            y_min = ( (rows - 1 - r) * eff_h_pt - offset_y) / scale_y
+            y_min = ((rows - 1 - r) * eff_h_pt - offset_y) / scale_y
 
             w_tile = paper_w_pt / scale_x
             h_tile = paper_h_pt / scale_y
 
-            # Map to image coordinates (0 to pix.width)
-            # 0..src_w  -> 0..pix.width
-            img_x = x_min * (pix.width / src_w)
-            img_y = (src_h - (y_min + h_tile)) * (pix.height / src_h) # Flip Y for display
-            img_w = w_tile * (pix.width / src_w)
-            img_h = h_tile * (pix.height / src_h)
+            # Map to image coordinates
+            img_x = x_min * (preview_w / src_w)
+            img_y = (src_h - (y_min + h_tile)) * (preview_h / src_h)
+            img_w = w_tile * (preview_w / src_w)
+            img_h = h_tile * (preview_h / src_h)
 
             rect = patches.Rectangle((img_x, img_y), img_w, img_h, linewidth=1, edgecolor='r', facecolor='none', linestyle='--')
             ax.add_patch(rect)
 
     ax.axis('off')
-    # st.pyplot(fig)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches='tight')
     st.image(buf, use_container_width=True)
     plt.close(fig)
 
 else:
-    st.info("Veuillez charger un fichier PDF pour commencer.")
+    st.info("Veuillez charger un fichier PDF ou Image pour commencer.")
