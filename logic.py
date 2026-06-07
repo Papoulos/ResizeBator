@@ -26,7 +26,6 @@ class PosterGenerator:
         try:
             img = Image.open(input_stream)
             is_image = True
-            img_format = img.format
         except Exception:
             is_image = False
             input_stream.seek(0)
@@ -52,16 +51,16 @@ class PosterGenerator:
             dpi = (300, 300)
 
         # Calculate size in points based on pixels and DPI
-        # size_pt = pixels / dpi * 72
-        width_pt = (img.size[0] / dpi[0]) * 72
-        height_pt = (img.size[1] / dpi[1]) * 72
+        # Force float to avoid Fraction issues in some environments (e.g. with pikepdf backend)
+        width_pt = float((img.size[0] / float(dpi[0])) * 72.0)
+        height_pt = float((img.size[1] / float(dpi[1])) * 72.0)
 
         # img2pdf layout options
         layout_fun = img2pdf.get_layout_fun(
             (width_pt, height_pt), # force the calculated size
             None, # fit
             None, # auto_orient
-            None, # dpi - if we specify size, we don't need dpi here usually
+            None, # dpi
         )
 
         input_stream.seek(0)
